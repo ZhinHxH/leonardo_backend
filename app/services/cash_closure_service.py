@@ -5,7 +5,7 @@ from sqlalchemy import desc, func, and_, or_
 from fastapi import HTTPException, status
 
 from app.models.cash_closure import CashClosure, CashClosureStatus
-from app.models.sales import Sale, SaleType
+from app.models.sales import Sale
 from app.models.user import User
 from app.core.logging_config import main_logger, exception_handler
 
@@ -21,7 +21,27 @@ class CashClosureService:
     def create_cash_closure(self, user_id: int, shift_start: datetime, 
                           sales_data: Dict[str, Any], counted_data: Dict[str, Any],
                           notes: Optional[str] = None) -> CashClosure:
-        """Crea un nuevo cierre de caja"""
+        """Crea un nuevo cierre de caja o actualiza uno existente para el mismo día"""
+        
+        # Validar que el cierre sea solo para la fecha actual
+        today = datetime.utcnow().date()
+        shift_date = shift_start.date()
+        
+        if shift_date != today:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Los cierres de caja solo pueden realizarse para la fecha actual ({today}). Fecha solicitada: {shift_date}"
+            )
+        
+        # Verificar si ya existe un cierre para este usuario en la fecha actual
+        existing_closure = self.db.query(CashClosure)\
+                                 .filter(CashClosure.user_id == user_id)\
+                                 .filter(CashClosure.shift_date == today)\
+                                 .first()
+        
+        if existing_closure:
+            logger.info(f"Actualizando cierre existente {existing_closure.id} para usuario {user_id} en fecha {today}")
+            return self._update_existing_closure(existing_closure, shift_start, sales_data, counted_data, notes)
         
         # Calcular diferencias
         differences = self._calculate_differences(sales_data, counted_data)
@@ -64,6 +84,96 @@ class CashClosureService:
         self.db.refresh(cash_closure)
         
         return cash_closure
+
+    @exception_handler(logger, {"service": "CashClosureService", "method": "get_today_closure"})
+    def get_today_closure(self, user_id: int) -> Optional[CashClosure]:
+        """Obtiene el cierre de caja del día actual para un usuario"""
+        
+        today = datetime.utcnow().date()
+        closure = self.db.query(CashClosure)\
+                        .filter(CashClosure.user_id == user_id)\
+                        .filter(CashClosure.shift_date == today)\
+                        .first()
+        
+        return closure
+
+    @exception_handler(logger, {"service": "CashClosureService", "method": "get_cash_closure_by_id"})
+    def get_cash_closure_by_id(self, closure_id: int) -> Optional[Dict[str, Any]]:
+        """Obtiene un cierre de caja por ID con información del usuario"""
+        
+        closure = self.db.query(CashClosure, User.name.label('user_name'))\
+                        .join(User, CashClosure.user_id == User.id)\
+                        .filter(CashClosure.id == closure_id)\
+                        .first()
+        
+        if not closure:
+            return None
+        
+        closure_obj, user_name = closure
+        closure_dict = closure_obj.to_dict()
+        closure_dict['user_name'] = user_name
+        
+        return closure_dict
+
+    def _update_existing_closure(self, existing_closure: CashClosure, shift_start: datetime,
+                               sales_data: Dict[str, Any], counted_data: Dict[str, Any],
+                               notes: Optional[str] = None) -> CashClosure:
+        """Actualiza un cierre de caja existente recalculando las ventas desde el inicio del turno"""
+        
+        # Recalcular ventas desde el inicio del turno para incluir nuevas ventas
+        logger.info(f"Recalculando ventas para cierre existente {existing_closure.id} desde {shift_start}")
+        updated_sales_data = self.get_shift_sales_summary(existing_closure.user_id, shift_start)
+        
+        # Usar los datos recalculados en lugar de los datos enviados
+        sales_data = updated_sales_data
+        
+        # Calcular diferencias con los datos actualizados
+        differences = self._calculate_differences(sales_data, counted_data)
+        
+        # Actualizar campos de ventas con datos recalculados
+        existing_closure.total_sales = sales_data.get('total_sales', 0.0)
+        existing_closure.total_products_sold = sales_data.get('total_products_sold', 0)
+        existing_closure.total_memberships_sold = sales_data.get('total_memberships_sold', 0)
+        existing_closure.total_daily_access_sold = sales_data.get('total_daily_access_sold', 0)
+        
+        # Actualizar desglose por método de pago con datos recalculados
+        existing_closure.cash_sales = sales_data.get('cash_sales', 0.0)
+        existing_closure.nequi_sales = sales_data.get('nequi_sales', 0.0)
+        existing_closure.bancolombia_sales = sales_data.get('bancolombia_sales', 0.0)
+        existing_closure.daviplata_sales = sales_data.get('daviplata_sales', 0.0)
+        existing_closure.card_sales = sales_data.get('card_sales', 0.0)
+        existing_closure.transfer_sales = sales_data.get('transfer_sales', 0.0)
+        
+        # Actualizar conteo físico
+        existing_closure.cash_counted = counted_data.get('cash_counted', 0.0)
+        existing_closure.nequi_counted = counted_data.get('nequi_counted', 0.0)
+        existing_closure.bancolombia_counted = counted_data.get('bancolombia_counted', 0.0)
+        existing_closure.daviplata_counted = counted_data.get('daviplata_counted', 0.0)
+        existing_closure.card_counted = counted_data.get('card_counted', 0.0)
+        existing_closure.transfer_counted = counted_data.get('transfer_counted', 0.0)
+        
+        # Actualizar diferencias
+        existing_closure.cash_difference = differences.get('cash_difference', 0.0)
+        existing_closure.nequi_difference = differences.get('nequi_difference', 0.0)
+        existing_closure.bancolombia_difference = differences.get('bancolombia_difference', 0.0)
+        existing_closure.daviplata_difference = differences.get('daviplata_difference', 0.0)
+        existing_closure.card_difference = differences.get('card_difference', 0.0)
+        existing_closure.transfer_difference = differences.get('transfer_difference', 0.0)
+        
+        # Actualizar notas y timestamps
+        if notes:
+            existing_closure.notes = notes
+        existing_closure.shift_end = datetime.utcnow()
+        existing_closure.discrepancies_notes = differences.get('discrepancies_notes')
+        
+        # Marcar como actualizado
+        existing_closure.status = CashClosureStatus.PENDING
+        
+        self.db.commit()
+        self.db.refresh(existing_closure)
+        
+        logger.info(f"Cierre de caja {existing_closure.id} actualizado exitosamente")
+        return existing_closure
 
     def _calculate_differences(self, sales_data: Dict[str, Any], counted_data: Dict[str, Any]) -> Dict[str, Any]:
         """Calcula las diferencias entre ventas del sistema y conteo físico"""
@@ -161,12 +271,15 @@ class CashClosureService:
     def get_shift_sales_summary(self, user_id: int, shift_start: datetime) -> Dict[str, Any]:
         """Obtiene resumen de ventas del turno actual"""
         
-        # Obtener ventas del turno
+        # Obtener ventas del turno (del usuario específico)
         sales_query = self.db.query(Sale)\
                            .filter(Sale.seller_id == user_id)\
-                           .filter(Sale.created_at >= shift_start)
+                           .filter(Sale.created_at >= shift_start)\
+                           .filter(Sale.status == "completed")  # Solo ventas completadas
         
         sales = sales_query.all()
+        
+        logger.info(f"Encontradas {len(sales)} ventas para el usuario {user_id} desde {shift_start}")
         
         # Calcular resúmenes
         total_sales = sum(sale.total_amount for sale in sales)
@@ -185,20 +298,26 @@ class CashClosureService:
         }
         
         for sale in sales:
+            logger.info(f"Procesando venta {sale.id}: tipo={sale.sale_type}, método={sale.payment_method}, monto={sale.total_amount}")
+            
             # Contar por tipo de venta
-            if sale.type == SaleType.PRODUCT:
+            if sale.sale_type == "product":
                 total_products_sold += 1
-            elif sale.type == SaleType.MEMBERSHIP:
+            elif sale.sale_type == "membership":
                 total_memberships_sold += 1
-            elif sale.type == SaleType.DAILY_ACCESS:
-                total_daily_access_sold += 1
+            elif sale.sale_type == "mixed":
+                # Para ventas mixtas, contar como producto y membresía
+                total_products_sold += 1
+                total_memberships_sold += 1
             
             # Desglose por método de pago
             payment_method = sale.payment_method.lower()
             if payment_method in payment_breakdown:
                 payment_breakdown[payment_method] += sale.total_amount
+            else:
+                logger.warning(f"Método de pago no reconocido: {payment_method}")
         
-        return {
+        result = {
             'total_sales': total_sales,
             'total_products_sold': total_products_sold,
             'total_memberships_sold': total_memberships_sold,
@@ -211,6 +330,76 @@ class CashClosureService:
             'transfer_sales': payment_breakdown['transfer'],
             'sales_count': len(sales)
         }
+        
+        logger.info(f"Resumen del turno generado: {result}")
+        return result
+
+    @exception_handler(logger, {"service": "CashClosureService", "method": "get_shift_items_sold"})
+    def get_shift_items_sold(self, user_id: int, shift_start: datetime) -> Dict[str, Any]:
+        """Obtiene el desglose de items vendidos en el turno con stock restante"""
+        
+        from app.models.sales import SaleProductItem
+        from app.models.product import Product
+        
+        # Obtener ventas del turno (del usuario específico)
+        sales_query = self.db.query(Sale)\
+                           .filter(Sale.seller_id == user_id)\
+                           .filter(Sale.created_at >= shift_start)\
+                           .filter(Sale.status == "completed")  # Solo ventas completadas
+        
+        sales = sales_query.all()
+        sale_ids = [sale.id for sale in sales]
+        
+        logger.info(f"Obteniendo items vendidos para {len(sale_ids)} ventas del usuario {user_id}")
+        
+        if not sale_ids:
+            return {
+                'items_sold': [],
+                'total_items_sold': 0,
+                'total_products_sold': 0
+            }
+        
+        # Obtener items vendidos con información del producto
+        items_query = self.db.query(
+            SaleProductItem.product_id,
+            Product.name.label('product_name'),
+            Product.current_stock.label('remaining_stock'),
+            Product.selling_price.label('unit_price'),
+            SaleProductItem.quantity.label('quantity_sold')
+        ).join(Product, SaleProductItem.product_id == Product.id)\
+         .filter(SaleProductItem.sale_id.in_(sale_ids))
+        
+        items = items_query.all()
+        
+        # Agrupar por producto para sumar cantidades
+        items_summary = {}
+        for item in items:
+            product_id = item.product_id
+            if product_id not in items_summary:
+                items_summary[product_id] = {
+                    'product_id': product_id,
+                    'product_name': item.product_name,
+                    'remaining_stock': item.remaining_stock,
+                    'unit_price': item.unit_price,
+                    'quantity_sold': 0
+                }
+            items_summary[product_id]['quantity_sold'] += item.quantity_sold
+        
+        # Convertir a lista
+        items_list = list(items_summary.values())
+        
+        # Calcular totales
+        total_items_sold = sum(item['quantity_sold'] for item in items_list)
+        total_products_sold = len(items_list)
+        
+        result = {
+            'items_sold': items_list,
+            'total_items_sold': total_items_sold,
+            'total_products_sold': total_products_sold
+        }
+        
+        logger.info(f"Desglose de items generado: {total_products_sold} productos únicos, {total_items_sold} items totales")
+        return result
 
     @exception_handler(logger, {"service": "CashClosureService", "method": "update_cash_closure"})
     def update_cash_closure(self, closure_id: int, update_data: Dict[str, Any]) -> CashClosure:

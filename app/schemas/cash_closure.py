@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, List
 from datetime import datetime
 from app.models.cash_closure import CashClosureStatus
@@ -9,6 +9,29 @@ class CashClosureBase(BaseModel):
     shift_start: datetime
     shift_end: Optional[datetime] = None
     notes: Optional[str] = None
+    
+    @validator('shift_date', 'shift_start', 'shift_end', pre=True)
+    def parse_datetime(cls, v):
+        if isinstance(v, str):
+            if not v or v.strip() == "":
+                # Si está vacío, usar la fecha/hora actual
+                return datetime.utcnow()
+            try:
+                # Manejar diferentes formatos de fecha
+                if v.endswith('Z'):
+                    # Formato ISO con Z (UTC)
+                    return datetime.fromisoformat(v.replace('Z', '+00:00'))
+                elif 'T' in v:
+                    # Formato ISO sin Z
+                    return datetime.fromisoformat(v)
+                else:
+                    # Solo fecha (YYYY-MM-DD)
+                    return datetime.fromisoformat(v + 'T00:00:00')
+            except ValueError as e:
+                print(f"Error parsing datetime '{v}': {e}")
+                # Si falla, usar la fecha actual
+                return datetime.utcnow()
+        return v
 
 class CashClosureCreate(CashClosureBase):
     """Schema para crear cierre de caja"""
