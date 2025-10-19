@@ -35,8 +35,8 @@ async def get_products(
 ):
     """Obtiene lista de productos con filtros"""
     
-    # Solo administradores pueden ver costos
-    if include_costs and current_user.role != "admin":
+    # Solo administradores pueden ver costos - validación robusta
+    if include_costs and current_user.role.upper() != "ADMIN":
         include_costs = False
     
     inventory_service = InventoryService(db)
