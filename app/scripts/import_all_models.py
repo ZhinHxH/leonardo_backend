@@ -18,6 +18,10 @@ def import_all_models():
         from app.models.user import User, UserRole, BloodType, Gender
         print("Modelos de usuario importados")
         
+        # Importar modelo Vehicle desde su archivo separado
+        from app.models.vehicle import Vehicle, VehicleType
+        print("Modelos de vehículo importados")
+        
         from app.models.membership import Membership, MembershipType, MembershipStatus, PaymentMethod
         print("Modelos de membresia importados")
         
@@ -43,6 +47,20 @@ def import_all_models():
         # Verificar que las relaciones se pueden resolver
         print("Verificando relaciones...")
         
+        # Verificar que User tiene la relación con Vehicle
+        if hasattr(User, 'vehicles'):
+            print("Relacion vehicles encontrada en User")
+        else:
+            print("ERROR: Relacion vehicles NO encontrada en User")
+            return False
+            
+        # Verificar que Vehicle tiene la relación con User
+        if hasattr(Vehicle, 'user'):
+            print("Relacion user encontrada en Vehicle")
+        else:
+            print("ERROR: Relacion user NO encontrada en Vehicle")
+            return False
+            
         # Verificar que User tiene la relación con CashClosure
         if hasattr(User, 'cash_closures'):
             print("Relacion cash_closures encontrada en User")
@@ -73,6 +91,7 @@ def test_model_relationships():
     try:
         from app.core.database import SessionLocal
         from app.models.user import User
+        from app.models.vehicle import Vehicle
         from app.models.cash_closure import CashClosure
         
         db = SessionLocal()
@@ -81,17 +100,74 @@ def test_model_relationships():
         user_count = db.query(User).count()
         print(f"Usuarios en la base de datos: {user_count}")
         
+        vehicle_count = db.query(Vehicle).count()
+        print(f"Vehículos en la base de datos: {vehicle_count}")
+        
         # Verificar que la relación funciona
         user = db.query(User).first()
         if user:
             print(f"Usuario encontrado: {user.email}")
+            print(f"Relacion vehicles disponible: {hasattr(user, 'vehicles')}")
             print(f"Relacion cash_closures disponible: {hasattr(user, 'cash_closures')}")
+        
+        # Verificar que Vehicle funciona
+        vehicle = db.query(Vehicle).first()
+        if vehicle:
+            print(f"Vehículo encontrado: {vehicle.plate}")
+            print(f"Relacion user disponible: {hasattr(vehicle, 'user')}")
         
         db.close()
         return True
         
     except Exception as e:
         print(f"ERROR: Error probando relaciones: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_vehicle_model():
+    """Prueba específica para el modelo Vehicle"""
+    print("\nProbando modelo Vehicle...")
+    
+    try:
+        from app.models.vehicle import Vehicle, VehicleType
+        from app.core.database import SessionLocal
+        
+        db = SessionLocal()
+        
+        # Crear una instancia de prueba del modelo Vehicle
+        test_vehicle = Vehicle(
+            user_id=1,  # Asumiendo que existe un usuario con ID 1
+            plate="TEST123",
+            vehicle_type=VehicleType.CAR,
+            brand="Toyota",
+            model="Corolla",
+            color="Rojo",
+            year=2020,
+            description="Vehículo de prueba"
+        )
+        
+        print(f"Vehículo de prueba creado: {test_vehicle}")
+        print(f"Plate: {test_vehicle.plate}")
+        print(f"Type: {test_vehicle.vehicle_type}")
+        print(f"Brand: {test_vehicle.brand}")
+        print(f"Model: {test_vehicle.model}")
+        print(f"Color: {test_vehicle.color}")
+        print(f"Year: {test_vehicle.year}")
+        print(f"Description: {test_vehicle.description}")
+        print(f"Is Active: {test_vehicle.is_active}")
+        print(f"Is Verified: {test_vehicle.is_verified}")
+        
+        # Probar el método to_dict
+        vehicle_dict = test_vehicle.to_dict()
+        print(f"Dict del vehículo: {vehicle_dict}")
+        
+        db.close()
+        print("✅ Modelo Vehicle probado exitosamente")
+        return True
+        
+    except Exception as e:
+        print(f"ERROR: Error probando modelo Vehicle: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -108,6 +184,11 @@ def main():
     # Probar relaciones
     if not test_model_relationships():
         print("ERROR: Error probando relaciones")
+        sys.exit(1)
+    
+    # Probar específicamente el modelo Vehicle
+    if not test_vehicle_model():
+        print("ERROR: Error probando modelo Vehicle")
         sys.exit(1)
     
     print("\nTodos los modelos importados y verificados correctamente!")

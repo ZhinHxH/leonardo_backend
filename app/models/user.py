@@ -75,7 +75,10 @@ class User(Base):
     access_events = relationship("AccessEvent", back_populates="user", cascade="all, delete-orphan")
     clinical_records = relationship("ClinicalHistory", foreign_keys="ClinicalHistory.user_id", back_populates="user", cascade="all, delete-orphan")
     goals = relationship("UserGoal", foreign_keys="UserGoal.user_id", back_populates="user", cascade="all, delete-orphan")
+    
     cash_closures = relationship("CashClosure", foreign_keys="CashClosure.user_id", back_populates="user", cascade="all, delete-orphan")
+    vehicles = relationship("Vehicle", back_populates="user", cascade="all, delete-orphan")
+
 
     def __repr__(self):
         return f"<User {self.email}>"
@@ -92,3 +95,6 @@ class User(Base):
             'updated_at': self.updated_at,
             'last_login': self.last_login
         } 
+
+# Importación eliminada para evitar dependencia circular
+# La relación se define usando string en vehicles.py
