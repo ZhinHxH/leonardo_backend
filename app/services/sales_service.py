@@ -60,8 +60,7 @@ class SalesService:
         total_amount = subtotal - discount_amount
         
         logger.info(f"💰 Cálculo de totales - Subtotal: {subtotal}, Descuento: {discount_amount}, IVA: {tax_amount}, Total: {total_amount}")
-        
-        # Crear la venta principal con todos los totales calculados
+
         sale = Sale(
             sale_number=sale_number,
             customer_id=sale_data.get('customer_id'),
@@ -73,6 +72,8 @@ class SalesService:
             subtotal=subtotal,
             tax_amount=tax_amount,
             discount_amount=discount_amount,
+            is_discount=sale_data.get('is_discount'),
+            discount_reason=sale_data.get('discount_reason'),
             total_amount=total_amount,
             change_amount=sale_data['amount_paid'] - total_amount
         )
@@ -107,15 +108,26 @@ class SalesService:
         return sale
 
     def _generate_sale_number(self) -> str:
-        """Genera un número único de venta"""
+        """Genera número de venta basado en el máximo número existente"""
         today = datetime.utcnow().strftime("%Y%m%d")
         
-        # Contar ventas del día
-        daily_count = self.db.query(Sale)\
-                            .filter(func.date(Sale.created_at) == datetime.utcnow().date())\
-                            .count()
+        # Buscar el máximo número de secuencia del día
+        last_sale = self.db.query(Sale)\
+                        .filter(Sale.sale_number.like(f"VTA-{today}-%"))\
+                        .order_by(Sale.id.desc())\
+                        .first()
         
-        return f"VTA-{today}-{daily_count + 1:04d}"
+        if last_sale:
+            # Extraer el número de secuencia del último sale_number
+            try:
+                last_number = int(last_sale.sale_number.split('-')[-1])
+                next_number = last_number + 1
+            except (ValueError, IndexError):
+                next_number = 1
+        else:
+            next_number = 1
+        
+        return f"VTA-{today}-{next_number:04d}"
 
     def _calculate_product_subtotal(self, item_data: Dict[str, Any]) -> float:
         """Calcula el subtotal de un producto sin crear el registro"""

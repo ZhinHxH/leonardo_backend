@@ -9,8 +9,46 @@ from app.models.user import User, UserRole
 from app.services.user_service import UserService
 from app.core.logging_config import main_logger
 
+from app.models.vehicles import VehicleType
+from datetime import datetime
+
 logger = main_logger
 router = APIRouter(tags=["users"])
+
+# Schema for vehicles
+class VehicleBase(BaseModel):
+    plate: str = Field(..., min_length=3, max_length=20, description="Placa del vehículo")
+    vehicle_type: Optional[VehicleType] = VehicleType.CAR
+    brand: Optional[str] = Field(None, max_length=100)
+    model: Optional[str] = Field(None, max_length=100)
+    color: Optional[str] = Field(None, max_length=50)
+    year: Optional[int] = Field(None, ge=1900, le=datetime.now().year + 1)
+    description: Optional[str] = None
+
+class VehicleCreate(VehicleBase):
+    user_id: int
+
+class VehicleUpdate(BaseModel):
+    plate: Optional[str] = Field(None, min_length=3, max_length=20)
+    vehicle_type: Optional[VehicleType] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    color: Optional[str] = None
+    year: Optional[int] = Field(None, ge=1900, le=datetime.now().year + 1)
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class VehicleResponse(VehicleBase):
+    id: int
+    user_id: int
+    is_active: bool
+    is_verified: bool
+    created_at: datetime
+    updated_at: Optional[datetime]
+    verified_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
 
 # Schemas
 class UserCreate(BaseModel):
@@ -28,6 +66,29 @@ class UserCreate(BaseModel):
     emergency_contact: Optional[str] = Field(None, max_length=255)
     emergency_phone: Optional[str] = Field(None, max_length=20)
 
+    # Campos opcionales para vehículo
+    has_vehicle: Optional[bool] = Field(False, description="Indica si el usuario tiene vehículo")
+    vehicle_plate: Optional[str] = Field(None, min_length=3, max_length=20, description="Placa del vehículo")
+    vehicle_type: Optional[VehicleType] = Field(None, description="Tipo de vehículo")
+    vehicle_brand: Optional[str] = Field(None, max_length=100, description="Marca del vehículo")
+    vehicle_model: Optional[str] = Field(None, max_length=100, description="Modelo del vehículo")
+    vehicle_color: Optional[str] = Field(None, max_length=50, description="Color del vehículo")
+    vehicle_year: Optional[int] = Field(None, ge=1900, le=datetime.now().year + 1, description="Año del vehículo")
+    vehicle_description: Optional[str] = Field(None, description="Descripción adicional del vehículo")
+
+class VehicleInput(BaseModel):
+    """Schema para crear/actualizar vehículos"""
+    id: Optional[int] = None  # Si tiene ID, es actualización; si no, es creación
+    plate: str = Field(..., min_length=3, max_length=20, description="Placa del vehículo")
+    vehicle_type: VehicleType = VehicleType.CAR
+    brand: Optional[str] = Field(None, max_length=100)
+    model: Optional[str] = Field(None, max_length=100)
+    color: Optional[str] = Field(None, max_length=50)
+    year: Optional[int] = Field(None, ge=1900, le=datetime.now().year + 1)
+    description: Optional[str] = None
+    is_active: bool = True
+    _action: Optional[str] = None  # 'delete' para marcar para eliminar
+
 class UserUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=255)
     email: Optional[str] = None
@@ -43,6 +104,9 @@ class UserUpdate(BaseModel):
     emergency_contact: Optional[str] = Field(None, max_length=255)
     emergency_phone: Optional[str] = Field(None, max_length=20)
     is_active: Optional[bool] = None
+    
+    # Gestión de vehículos
+    vehicles: Optional[list[VehicleInput]] = None
 
 @router.get("/")
 async def get_users(
@@ -134,6 +198,7 @@ async def create_user(
         )
     
     user_service = UserService(db)
+    logger.info(f"Hasta acá va bien {user_data.dict()}")
     
     try:
         new_user = user_service.create_user(user_data.dict())
@@ -150,8 +215,12 @@ async def create_user(
             }
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ Error creando usuario: {e}")
+        import traceback
+        error_detail = f"{str(e)}\n{traceback.format_exc()}"
+        logger.error(f"❌ Error creando usuario: {error_detail}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
@@ -200,6 +269,52 @@ async def update_user(
         raise
     except Exception as e:
         logger.error(f"❌ Error actualizando usuario {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.get("/{user_id}/vehicles")
+async def get_user_vehicles(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Obtiene los vehículos de un usuario"""
+    
+    # Verificar permisos
+    user_role_lower = current_user.role.lower() if current_user.role else 'member'
+    if user_role_lower not in ['admin', 'manager', 'receptionist']:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sin permisos para ver vehículos"
+        )
+    
+    try:
+        from app.models.vehicles import Vehicle
+        
+        vehicles = db.query(Vehicle).filter(Vehicle.user_id == user_id).all()
+        
+        vehicles_data = []
+        for vehicle in vehicles:
+            vehicles_data.append({
+                "id": vehicle.id,
+                "plate": vehicle.plate,
+                "vehicle_type": vehicle.vehicle_type.value if hasattr(vehicle.vehicle_type, 'value') else vehicle.vehicle_type,
+                "brand": vehicle.brand,
+                "model": vehicle.model,
+                "color": vehicle.color,
+                "year": vehicle.year,
+                "description": vehicle.description,
+                "is_active": vehicle.is_active,
+                "is_verified": vehicle.is_verified,
+                "created_at": vehicle.created_at.isoformat() if vehicle.created_at else None
+            })
+        
+        return {"vehicles": vehicles_data}
+        
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo vehículos del usuario {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
