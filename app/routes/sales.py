@@ -386,6 +386,44 @@ async def get_sales_summary(
             detail=str(e)
         )
 
+@router.get("/payment-methods")
+async def get_payment_methods(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtiene métodos de pago disponibles
+    """
+    
+    # Verificar permisos
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.RECEPTIONIST]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sin permisos para ver métodos de pago"
+        )
+    
+    try:
+        # Obtener métodos de pago únicos de las ventas
+        payment_methods = db.query(Sale.payment_method).filter(
+            Sale.payment_method.isnot(None),
+            Sale.payment_method != ""
+        ).distinct().all()
+        
+        # Extraer solo los valores y filtrar nulos
+        methods = [method[0] for method in payment_methods if method[0] is not None]
+        
+        # Si no hay métodos en la base de datos, retornar los métodos por defecto
+        if not methods:
+            methods = ["cash", "nequi", "bancolombia", "daviplata", "card", "transfer"]
+        
+        logger.info(f"📊 Métodos de pago encontrados: {methods}")
+        return methods
+        
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo métodos de pago: {e}")
+        # Retornar métodos por defecto en caso de error
+        return ["cash", "nequi", "bancolombia", "daviplata", "card", "transfer"]
+
 @router.post("/validate-stock")
 async def validate_stock(
     product_id: int,

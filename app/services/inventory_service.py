@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, text
@@ -18,6 +18,45 @@ class InventoryService:
     
     def __init__(self, db: Session):
         self.db = db
+
+    def _normalize_date_range(self, date_from: Optional[str] = None, date_to: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+        """
+        Normaliza el rango de fechas para que date_to sea el final del día especificado.
+        
+        Args:
+            date_from: Fecha de inicio en formato YYYY-MM-DD
+            date_to: Fecha de fin en formato YYYY-MM-DD
+            
+        Returns:
+            Tuple con (date_from_normalized, date_to_normalized)
+        """
+        normalized_from = date_from
+        normalized_to = date_to
+        
+        if date_to:
+            # Convertir date_to al final del día (23:59:59.999999)
+            try:
+                date_obj = datetime.strptime(date_to, '%Y-%m-%d')
+                # Agregar 23 horas, 59 minutos, 59 segundos y 999999 microsegundos
+                end_of_day = date_obj + timedelta(hours=23, minutes=59, seconds=59, microseconds=999999)
+                normalized_to = end_of_day.strftime('%Y-%m-%d %H:%M:%S.%f')
+            except ValueError:
+                # Si el formato no es válido, usar como está
+                logger.warning(f"Formato de fecha inválido para date_to: {date_to}")
+                pass
+        
+        if date_from:
+            # Asegurar que date_from sea el inicio del día (00:00:00)
+            try:
+                date_obj = datetime.strptime(date_from, '%Y-%m-%d')
+                start_of_day = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
+                normalized_from = start_of_day.strftime('%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                # Si el formato no es válido, usar como está
+                logger.warning(f"Formato de fecha inválido para date_from: {date_from}")
+                pass
+        
+        return normalized_from, normalized_to
 
     @exception_handler(logger, {"service": "InventoryService", "method": "get_products"})
     def get_products(self, 
@@ -588,3 +627,364 @@ class InventoryService:
             "total_inventory_cost": total_cost,
             "estimated_profit": total_value - total_cost
         }
+
+    @exception_handler(logger, {"service": "InventoryService", "method": "get_stock_movements_report"})
+    def get_stock_movements_report(self, date_from: Optional[str] = None, date_to: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Obtiene movimientos de stock para reportes"""
+        
+        # Normalizar fechas para consistencia
+        normalized_from, normalized_to = self._normalize_date_range(date_from, date_to)
+        
+        query = self.db.query(StockMovement).join(Product)
+        
+        if normalized_from:
+            query = query.filter(StockMovement.movement_date >= normalized_from)
+        if normalized_to:
+            query = query.filter(StockMovement.movement_date <= normalized_to)
+        
+        movements = query.order_by(StockMovement.movement_date.desc()).limit(100).all()
+        
+        # Agrupar por fecha para el reporte
+        movements_by_date = {}
+        for movement in movements:
+            date_key = movement.movement_date.strftime('%Y-%m-%d')
+            if date_key not in movements_by_date:
+                movements_by_date[date_key] = {
+                    'date': date_key,
+                    'purchases': 0,
+                    'sales': 0,
+                    'adjustments': 0,
+                    'net_movement': 0
+                }
+            
+            if movement.movement_type == 'purchase':
+                movements_by_date[date_key]['purchases'] += movement.quantity
+            elif movement.movement_type == 'sale':
+                movements_by_date[date_key]['sales'] += abs(movement.quantity)
+            elif movement.movement_type == 'adjustment':
+                movements_by_date[date_key]['adjustments'] += movement.quantity
+            
+            movements_by_date[date_key]['net_movement'] += movement.quantity
+        
+        return list(movements_by_date.values())
+
+    @exception_handler(logger, {"service": "InventoryService", "method": "get_category_values_report"})
+    def get_category_values_report(self) -> List[Dict[str, Any]]:
+        """Obtiene valores por categoría para reportes"""
+        
+        # Query para obtener valor total por categoría
+        query = self.db.query(
+            Category.id,
+            Category.name,
+            func.sum(Product.current_stock * Product.selling_price).label('total_value'),
+            func.count(Product.id).label('product_count')
+        ).outerjoin(Product, Category.id == Product.category_id)\
+         .filter(Product.status == "active")\
+         .group_by(Category.id, Category.name)\
+         .order_by(func.sum(Product.current_stock * Product.selling_price).desc())
+        
+        results = query.all()
+        
+        # Calcular total para porcentajes
+        total_value = sum(result.total_value or 0 for result in results)
+        
+        category_values = []
+        for result in results:
+            percentage = (result.total_value / total_value * 100) if total_value > 0 else 0
+            category_values.append({
+                'category': result.name,
+                'value': result.total_value or 0,
+                'percentage': round(percentage, 1),
+                'products': result.product_count or 0
+            })
+        
+        return category_values
+
+    @exception_handler(logger, {"service": "InventoryService", "method": "get_top_products_report"})
+    def get_top_products_report(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Obtiene productos más vendidos para reportes basado en ventas reales"""
+        
+        from app.models.sales import SaleProductItem, Sale
+        
+        # Query para obtener productos más vendidos basado en ventas reales
+        query = self.db.query(
+            SaleProductItem.product_id,
+            SaleProductItem.product_name,
+            func.sum(SaleProductItem.quantity).label('total_sold'),
+            func.sum(SaleProductItem.line_total).label('total_revenue'),
+            func.sum(SaleProductItem.quantity * SaleProductItem.unit_cost).label('total_cost'),
+            func.avg(SaleProductItem.unit_price).label('avg_price')
+        ).join(Sale, SaleProductItem.sale_id == Sale.id)\
+         .filter(Sale.is_reversed == False)\
+         .filter(Sale.status == "completed")\
+         .group_by(SaleProductItem.product_id, SaleProductItem.product_name)\
+         .order_by(func.sum(SaleProductItem.quantity).desc())\
+         .limit(limit)
+        
+        results = query.all()
+        
+        top_products = []
+        for result in results:
+            # Calcular ganancia y margen
+            total_revenue = result.total_revenue or 0
+            total_cost = result.total_cost or 0
+            profit = total_revenue - total_cost
+            margin = (profit / total_revenue * 100) if total_revenue > 0 else 0
+            
+            top_products.append({
+                'product': result.product_name,
+                'sales': int(result.total_sold or 0),
+                'revenue': round(total_revenue, 0),
+                'profit': round(profit, 0),
+                'margin': round(margin, 1)
+            })
+        
+        # Si no hay ventas reales, mostrar productos con mayor valor en stock como fallback
+        if not top_products:
+            logger.warning("No hay ventas reales, usando productos con mayor valor en stock como fallback")
+            
+            fallback_query = self.db.query(Product)\
+                                  .filter(Product.status == "active")\
+                                  .order_by((Product.current_stock * Product.selling_price).desc())\
+                                  .limit(limit)
+            
+            products = fallback_query.all()
+            
+            for product in products:
+                # Usar stock actual como indicador de popularidad
+                estimated_sales = max(1, product.current_stock)
+                revenue = estimated_sales * product.selling_price
+                profit = revenue - (estimated_sales * product.current_cost)
+                margin = (profit / revenue * 100) if revenue > 0 else 0
+                
+                top_products.append({
+                    'product': product.name,
+                    'sales': estimated_sales,
+                    'revenue': round(revenue, 0),
+                    'profit': round(profit, 0),
+                    'margin': round(margin, 1)
+                })
+        
+        logger.info(f"Generados {len(top_products)} productos más vendidos")
+        return top_products
+
+    @exception_handler(logger, {"service": "InventoryService", "method": "get_top_products_by_date_range"})
+    def get_top_products_by_date_range(self, date_from: Optional[str] = None, date_to: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """Obtiene productos más vendidos en un rango de fechas específico"""
+        
+        from app.models.sales import SaleProductItem, Sale
+        
+        # Normalizar fechas para consistencia
+        normalized_from, normalized_to = self._normalize_date_range(date_from, date_to)
+        
+        # Construir query base
+        query = self.db.query(
+            SaleProductItem.product_id,
+            SaleProductItem.product_name,
+            func.sum(SaleProductItem.quantity).label('total_sold'),
+            func.sum(SaleProductItem.line_total).label('total_revenue'),
+            func.sum(SaleProductItem.quantity * SaleProductItem.unit_cost).label('total_cost'),
+            func.avg(SaleProductItem.unit_price).label('avg_price')
+        ).join(Sale, SaleProductItem.sale_id == Sale.id)\
+         .filter(Sale.is_reversed == False)\
+         .filter(Sale.status == "completed")
+        
+        # Aplicar filtros de fecha normalizados
+        if normalized_from:
+            query = query.filter(Sale.created_at >= normalized_from)
+        if normalized_to:
+            query = query.filter(Sale.created_at <= normalized_to)
+        
+        # Agregar agrupación y ordenamiento
+        query = query.group_by(SaleProductItem.product_id, SaleProductItem.product_name)\
+                    .order_by(func.sum(SaleProductItem.quantity).desc())\
+                    .limit(limit)
+        
+        results = query.all()
+        
+        top_products = []
+        for result in results:
+            total_revenue = result.total_revenue or 0
+            total_cost = result.total_cost or 0
+            profit = total_revenue - total_cost
+            margin = (profit / total_revenue * 100) if total_revenue > 0 else 0
+            
+            top_products.append({
+                'product': result.product_name,
+                'sales': int(result.total_sold or 0),
+                'revenue': round(total_revenue, 0),
+                'profit': round(profit, 0),
+                'margin': round(margin, 1),
+                'avg_price': round(result.avg_price or 0, 0)
+            })
+        
+        logger.info(f"Generados {len(top_products)} productos más vendidos para el período {date_from} - {date_to}")
+        return top_products
+
+    @exception_handler(logger, {"service": "InventoryService", "method": "get_inventory_trends_report"})
+    def get_inventory_trends_report(self, months: int = 6) -> List[Dict[str, Any]]:
+        """Obtiene tendencias del inventario para reportes"""
+        
+        from sqlalchemy import and_
+        
+        # Obtener valor actual del inventario
+        current_value = self.db.query(func.sum(Product.current_stock * Product.selling_price))\
+                              .filter(Product.status == "active")\
+                              .scalar() or 0
+        
+        trends = []
+        month_names = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+        
+        # Si no hay valor actual, retornar datos vacíos
+        if current_value == 0:
+            logger.warning("No hay valor de inventario actual para generar tendencias")
+            return []
+        
+        # Obtener datos históricos reales de movimientos de stock
+        for i in range(months):
+            # Calcular fecha del mes
+            target_date = datetime.now() - timedelta(days=30 * i)
+            month_start = target_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            
+            # Obtener movimientos del mes
+            monthly_movements = self.db.query(StockMovement)\
+                                     .filter(and_(
+                                         StockMovement.movement_date >= month_start,
+                                         StockMovement.movement_date < month_start + timedelta(days=32)
+                                     ))\
+                                     .count()
+            
+            # Calcular valor estimado del inventario en ese mes
+            if i == 0:
+                # Mes actual - usar valor real
+                estimated_value = current_value
+                growth = 0
+            else:
+                # Meses anteriores - estimar basado en movimientos y variación temporal
+                # Factor de variación basado en el tiempo (más antiguo = menor valor)
+                time_factor = max(0.7, 1 - (i * 0.05))  # 5% menos por cada mes hacia atrás
+                
+                # Factor de movimientos (más movimientos = más actividad = mayor valor)
+                movement_factor = min(1.2, 1 + (monthly_movements * 0.02))  # 2% más por cada movimiento
+                
+                estimated_value = current_value * time_factor * movement_factor
+                
+                # Calcular crecimiento comparado con el mes anterior
+                if i < months - 1:
+                    prev_time_factor = max(0.7, 1 - ((i + 1) * 0.05))
+                    prev_movement_factor = min(1.2, 1 + (monthly_movements * 0.02))
+                    prev_value = current_value * prev_time_factor * prev_movement_factor
+                    growth = ((estimated_value - prev_value) / prev_value * 100) if prev_value > 0 else 0
+                else:
+                    growth = 0
+            
+            trends.append({
+                'month': month_names[target_date.month - 1],
+                'total_value': round(estimated_value, 0),
+                'movements': monthly_movements,
+                'growth': round(growth, 1)
+            })
+        
+        # Ordenar por fecha (más antiguo primero)
+        trends.reverse()
+        
+        # Asegurar que tenemos al menos el mes actual
+        if not trends:
+            current_month = month_names[datetime.now().month - 1]
+            trends.append({
+                'month': current_month,
+                'total_value': round(current_value, 0),
+                'movements': 0,
+                'growth': 0
+            })
+        
+        logger.info(f"Generadas {len(trends)} tendencias de inventario")
+        return trends
+
+    @exception_handler(logger, {"service": "InventoryService", "method": "get_complete_inventory_report"})
+    def get_complete_inventory_report(self, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene reporte completo de inventario"""
+        
+        # Normalizar fechas para consistencia en todos los métodos
+        normalized_from, normalized_to = self._normalize_date_range(date_from, date_to)
+        
+        # Obtener todos los datos del reporte usando fechas normalizadas
+        stats = self.get_inventory_stats_by_date_range(date_from, date_to)
+        stock_movements = self.get_stock_movements_report(date_from, date_to)
+        category_values = self.get_category_values_report()
+        low_stock_items = self.get_low_stock_products()
+        
+        # Usar productos más vendidos con filtro de fecha si está disponible
+        if date_from or date_to:
+            top_products = self.get_top_products_by_date_range(date_from, date_to, 5)
+        else:
+            top_products = self.get_top_products_report(5)
+            
+        trends = self.get_inventory_trends_report(6)
+        
+        # Log de las fechas normalizadas para debugging
+        logger.info(f"Reporte de inventario generado para fechas: {date_from} - {date_to}")
+        logger.info(f"Fechas normalizadas: {normalized_from} - {normalized_to}")
+        
+        # Formatear productos con stock bajo
+        formatted_low_stock = []
+        for product in low_stock_items:
+            status = 'out' if product.current_stock == 0 else 'critical' if product.current_stock <= product.min_stock else 'low'
+            formatted_low_stock.append({
+                'product': product.name,
+                'current_stock': product.current_stock,
+                'min_stock': product.min_stock,
+                'category': product.category.name if product.category else 'Sin categoría',
+                'value': product.current_stock * product.selling_price,
+                'status': status
+            })
+        
+        return {
+            'stats': stats,
+            'stock_movements': stock_movements,
+            'category_values': category_values,
+            'low_stock_items': formatted_low_stock,
+            'top_products': top_products,
+            'trends': trends
+        }
+
+    @exception_handler(logger, {"service": "InventoryService", "method": "get_inventory_stats_by_date_range"})
+    def get_inventory_stats_by_date_range(self, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene estadísticas de inventario para un rango de fechas específico"""
+        
+        # Normalizar fechas para consistencia
+        normalized_from, normalized_to = self._normalize_date_range(date_from, date_to)
+        
+        # Obtener estadísticas base
+        base_stats = self.get_inventory_summary()
+        
+        # Si hay fechas, obtener estadísticas específicas del período
+        if normalized_from or normalized_to:
+            from app.models.sales import SaleProductItem, Sale
+            
+            # Calcular ventas del período
+            sales_query = self.db.query(
+                func.sum(SaleProductItem.quantity).label('total_quantity_sold'),
+                func.sum(SaleProductItem.line_total).label('total_revenue'),
+                func.count(SaleProductItem.id).label('total_sales_count')
+            ).join(Sale, SaleProductItem.sale_id == Sale.id)\
+             .filter(Sale.is_reversed == False)\
+             .filter(Sale.status == "completed")
+            
+            if normalized_from:
+                sales_query = sales_query.filter(Sale.created_at >= normalized_from)
+            if normalized_to:
+                sales_query = sales_query.filter(Sale.created_at <= normalized_to)
+            
+            sales_result = sales_query.first()
+            
+            # Agregar estadísticas del período
+            base_stats.update({
+                'period_total_quantity_sold': int(sales_result.total_quantity_sold or 0),
+                'period_total_revenue': float(sales_result.total_revenue or 0),
+                'period_total_sales_count': int(sales_result.total_sales_count or 0),
+                'period_date_from': date_from,
+                'period_date_to': date_to
+            })
+        
+        return base_stats

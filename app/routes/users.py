@@ -243,3 +243,35 @@ async def delete_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@router.get("/sellers")
+async def get_sellers(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtiene lista de vendedores disponibles para reportes
+    """
+    
+    # Verificar permisos
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sin permisos para ver vendedores"
+        )
+    
+    try:
+        # Obtener usuarios que pueden ser vendedores
+        sellers = db.query(User).filter(
+            User.role.in_([UserRole.ADMIN, UserRole.MANAGER, UserRole.RECEPTIONIST]),
+            User.is_active == True
+        ).all()
+        
+        return [{"id": seller.id, "name": seller.name} for seller in sellers]
+        
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo vendedores: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )

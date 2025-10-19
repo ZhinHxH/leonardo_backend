@@ -78,7 +78,7 @@ async def enroll_fingerprint(
     Enrola huella dactilar de un usuario
     """
     # Verificar permisos (solo admin, manager o receptionist pueden enrolar)
-    if current_user.role not in ["admin", "manager", "receptionist"]:
+    if current_user.role.upper() not in ["ADMIN", "MANAGER", "RECEPTIONIST"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permisos para enrolar huellas dactilares"
@@ -149,7 +149,7 @@ async def delete_fingerprint(
     Elimina una huella dactilar
     """
     # Verificar permisos
-    if current_user.role not in ["admin", "manager", "receptionist"]:
+    if current_user.role.upper() not in ["ADMIN", "MANAGER", "RECEPTIONIST"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permisos para eliminar huellas dactilares"
@@ -178,7 +178,7 @@ async def get_access_events(
     Obtiene eventos de acceso
     """
     # Verificar permisos
-    if current_user.role not in ["admin", "manager"]:
+    if current_user.role.upper() not in ["ADMIN", "MANAGER"]:
         # Los usuarios normales solo pueden ver sus propios eventos
         user_id = current_user.id
     
@@ -221,7 +221,7 @@ async def get_device_status(
     Verifica el estado de conexión de un panel inBIO
     """
     # Verificar permisos
-    if current_user.role not in ["admin", "manager", "receptionist"]:
+    if current_user.role.upper() not in ["ADMIN", "MANAGER", "RECEPTIONIST"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permisos para verificar dispositivos"
@@ -248,7 +248,7 @@ async def sync_device_logs(
     Sincroniza logs de asistencia del panel inBIO
     """
     # Verificar permisos
-    if current_user.role not in ["admin", "manager"]:
+    if current_user.role.upper() not in ["ADMIN", "MANAGER"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permisos para sincronizar logs"

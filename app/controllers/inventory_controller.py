@@ -60,7 +60,7 @@ async def create_product(
 ):
     """Crea un nuevo producto (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden crear productos"
@@ -84,7 +84,7 @@ async def update_product(
 ):
     """Actualiza un producto (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden editar productos"
@@ -108,7 +108,7 @@ async def delete_product(
 ):
     """Elimina un producto (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden eliminar productos"
@@ -129,7 +129,7 @@ async def restock_product(
 ):
     """Registra restock de un producto (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden hacer restock"
@@ -158,7 +158,7 @@ async def get_product_cost_history(
 ):
     """Obtiene historial de costos de un producto (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden ver el historial de costos"
@@ -192,7 +192,7 @@ async def create_category(
 ):
     """Crea una nueva categoría (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden crear categorías"
@@ -213,7 +213,7 @@ async def update_category(
 ):
     """Actualiza una categoría (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden editar categorías"
@@ -236,7 +236,7 @@ async def delete_category(
 ):
     """Elimina una categoría (solo administradores)"""
     
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los administradores pueden eliminar categorías"
@@ -259,7 +259,7 @@ async def get_inventory_summary(
     summary = inventory_service.get_inventory_summary()
     
     # Solo administradores ven costos
-    if current_user.role != "admin":
+    if current_user.role.upper() != "ADMIN":
         summary.pop("total_inventory_cost", None)
         summary.pop("estimated_profit", None)
     
@@ -280,3 +280,75 @@ async def get_inventory_alerts(
         "low_stock_products": low_stock_products,
         "alert_count": len(low_stock_products)
     }
+
+# Nuevos endpoints para reportes
+@router.get("/reports/complete")
+@exception_handler(logger, {"endpoint": "/inventory/reports/complete"})
+async def get_complete_inventory_report(
+    date_from: Optional[str] = Query(None, description="Fecha inicio (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Fecha fin (YYYY-MM-DD)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obtiene reporte completo de inventario"""
+    
+    inventory_service = InventoryService(db)
+    report_data = inventory_service.get_complete_inventory_report(date_from, date_to)
+    
+    return report_data
+
+@router.get("/reports/stock-movements")
+@exception_handler(logger, {"endpoint": "/inventory/reports/stock-movements"})
+async def get_stock_movements_report(
+    date_from: Optional[str] = Query(None, description="Fecha inicio (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Fecha fin (YYYY-MM-DD)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obtiene movimientos de stock para reportes"""
+    
+    inventory_service = InventoryService(db)
+    movements = inventory_service.get_stock_movements_report(date_from, date_to)
+    
+    return movements
+
+@router.get("/reports/category-values")
+@exception_handler(logger, {"endpoint": "/inventory/reports/category-values"})
+async def get_category_values_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obtiene valores por categoría para reportes"""
+    
+    inventory_service = InventoryService(db)
+    category_values = inventory_service.get_category_values_report()
+    
+    return category_values
+
+@router.get("/reports/top-products")
+@exception_handler(logger, {"endpoint": "/inventory/reports/top-products"})
+async def get_top_products_report(
+    limit: int = Query(10, ge=1, le=50, description="Número de productos a retornar"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obtiene productos más vendidos para reportes"""
+    
+    inventory_service = InventoryService(db)
+    top_products = inventory_service.get_top_products_report(limit)
+    
+    return top_products
+
+@router.get("/reports/trends")
+@exception_handler(logger, {"endpoint": "/inventory/reports/trends"})
+async def get_inventory_trends_report(
+    months: int = Query(6, ge=1, le=12, description="Número de meses a analizar"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obtiene tendencias del inventario para reportes"""
+    
+    inventory_service = InventoryService(db)
+    trends = inventory_service.get_inventory_trends_report(months)
+    
+    return trends
