@@ -1,5 +1,5 @@
 from sqlalchemy import Boolean, Column, Integer, String, Float, ForeignKey, DateTime, Text, Enum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 from sqlalchemy.sql import func
 from app.core.database import Base
 import enum
@@ -33,6 +33,34 @@ class Sale(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     
+    #Disscount information
+    is_discount = Column(Boolean, default=False, nullable=False)
+    discount_reason= Column(String(100), default=None, nullable=True)
+    discount_amount = Column(Float, default=0.0, nullable=False)
+
+    @validates('discount_amount')
+    def validate_discount_amount(self, key, discount_amount):
+        """Valida que si is_discount es False, discount_amount sea 0"""
+        # Si is_discount es None (aún no se ha establecido), permitir temporalmente
+        if self.is_discount is None:
+            return discount_amount
+            
+        if not self.is_discount and discount_amount > 0:
+            raise ValueError(
+                "No se puede tener un descuento mayor a 0 cuando is_discount es False. "
+                f"is_discount: {self.is_discount}, discount_amount: {discount_amount}"
+            )
+        return discount_amount
+
+    @validates('is_discount')
+    def validate_is_discount(self, key, is_discount):
+        """Si se desactiva el descuento, reinicia el monto y razón"""
+        if not is_discount:
+            # Reiniciar los valores de descuento cuando se desactiva
+            self.discount_amount = 0.0
+            self.discount_reason = "No reason available"
+        return is_discount
+
     # Información básica
     sale_number = Column(String(20), unique=True, nullable=False)  # Número de venta único
     customer_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Cliente (opcional para ventas rápidas)

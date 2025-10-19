@@ -33,6 +33,9 @@ class CreateSaleRequest(BaseModel):
     discount_amount: float = Field(default=0.0, ge=0)
     notes: Optional[str] = None
     products: Optional[List[SaleItemCreate]] = []
+    is_discount: Optional[bool] = False
+    discount_amount: Optional[float] = 0.0
+    discount_reason: Optional[str] = None
     memberships: Optional[List[MembershipItemCreate]] = []
 
     class Config:
