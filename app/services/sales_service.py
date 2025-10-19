@@ -5,7 +5,16 @@ from sqlalchemy import desc, func, text
 from fastapi import HTTPException, status
 import json
 
-from app.models.sales import Sale, SaleItem, MembershipSale, SaleReversalLog, SaleStatus, SaleType, PaymentMethod
+from app.models.sales import (
+    Sale, 
+    SaleProductItem, 
+    SaleMembershipItem, 
+    SaleDailyAccessItem,
+    SaleReversalLog, 
+    SaleStatus, 
+    SaleType, 
+    SalePaymentMethod
+)
 from app.models.inventory import Product
 from app.models.clinical_history import MembershipPlan
 from app.models.membership import Membership, MembershipStatus
@@ -184,7 +193,7 @@ class SalesService:
         discount_percentage = item_data.get('discount_percentage', 0.0)
         line_total = quantity * unit_price * (1 - discount_percentage / 100)
         
-        sale_item = SaleItem(
+        sale_item = SaleProductItem(
             sale_id=sale_id,
             product_id=product.id,
             product_name=product.name,
@@ -242,14 +251,15 @@ class SalesService:
         logger.info(f"💳 Plan encontrado: {plan.name}, Precio original: {plan.price}, Precio con descuento: {plan.discount_price}, Precio final: {plan_price}")
         
         # Crear registro de venta de membresía
-        membership_sale = MembershipSale(
+        membership_sale = SaleMembershipItem(
             sale_id=sale_id,
             membership_plan_id=plan.id,
+            user_id=customer_id,
             plan_name=plan.name,
             plan_duration_days=plan.duration_days,
             plan_price=plan_price,
-            membership_start_date=start_date,
-            membership_end_date=end_date
+            start_date=start_date,
+            end_date=end_date
         )
         
         self.db.add(membership_sale)
@@ -501,8 +511,8 @@ class SalesService:
                 "plan_name": membership_sale.plan_name,
                 "plan_price": membership_sale.plan_price,
                 "duration_days": membership_sale.plan_duration_days,
-                "start_date": membership_sale.membership_start_date,
-                "end_date": membership_sale.membership_end_date
+                "start_date": membership_sale.start_date,
+                "end_date": membership_sale.end_date
             })
         
         return {

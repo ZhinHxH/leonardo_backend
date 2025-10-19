@@ -8,7 +8,16 @@ from .membership import Membership, MembershipType, MembershipStatus, PaymentMet
 # from .clinical_history import ClinicalHistory, UserGoal, MembershipPlan, HistoryType
 from .attendance import Attendance
 from .inventory import Product, Category, ProductStatus, StockMovement, ProductCostHistory, InventoryReport, StockMovementType
-from .sales import Sale, SaleItem, MembershipSale, SaleReversalLog
+from .sales import (
+    Sale, 
+    SaleProductItem, 
+    SaleMembershipItem, 
+    SaleDailyAccessItem,
+    SaleReversalLog, 
+    SaleStatus, 
+    SaleType, 
+    SalePaymentMethod
+)
 from .fingerprint import Fingerprint, AccessEvent, DeviceConfig, FingerprintStatus, AccessEventStatus, DeviceType
 
 # Exportar todos los modelos
@@ -29,7 +38,8 @@ __all__ = [
     "Product", "Category", "ProductStatus", "StockMovement", "ProductCostHistory", "InventoryReport", "StockMovementType",
     
     # Sale models
-    "Sale", "SaleItem", "MembershipSale", "SaleReversalLog",
+    "Sale", "SaleProductItem", "SaleMembershipItem", "SaleDailyAccessItem", "SaleReversalLog", 
+    "SaleStatus", "SaleType", "SalePaymentMethod",
     
     # Fingerprint models
     "Fingerprint", "AccessEvent", "DeviceConfig", 

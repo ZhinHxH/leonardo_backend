@@ -21,7 +21,7 @@ from app.models.inventory import (
     Product, Category, ProductStatus, StockMovement, 
     ProductCostHistory, InventoryReport, StockMovementType
 )
-from app.models.sale import Sale, SaleType, SaleItem
+from app.models.sales import Sale, SaleType, SaleProductItem
 from app.models.fingerprint import (
     Fingerprint, AccessEvent, DeviceConfig, 
     FingerprintStatus, AccessEventStatus, DeviceType

@@ -85,7 +85,7 @@ class Product(Base):
     category = relationship("Category", back_populates="products")
     stock_movements = relationship("StockMovement", back_populates="product", cascade="all, delete-orphan")
     cost_history = relationship("ProductCostHistory", back_populates="product", cascade="all, delete-orphan")
-    sales = relationship("SaleItem", back_populates="product")
+    sale_items = relationship("SaleProductItem", back_populates="product", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Product {self.name} - Stock: {self.current_stock}>"

@@ -18,7 +18,7 @@ class SaleType(str, enum.Enum):
     MEMBERSHIP = "membership"
     MIXED = "mixed"  # Productos + membresía
 
-class PaymentMethod(str, enum.Enum):
+class SalePaymentMethod(str, enum.Enum):
     """Métodos de pago"""
     CASH = "cash"
     NEQUI = "nequi"
@@ -71,8 +71,8 @@ class Sale(Base):
     customer = relationship("User", foreign_keys=[customer_id])
     seller = relationship("User", foreign_keys=[seller_id])
     reversed_by_user = relationship("User", foreign_keys=[reversed_by])
-    items = relationship("SaleItem", back_populates="sale", cascade="all, delete-orphan")
-    membership_sales = relationship("MembershipSale", back_populates="sale", cascade="all, delete-orphan")
+    items = relationship("SaleProductItem", back_populates="sale", cascade="all, delete-orphan")
+    membership_sales = relationship("SaleMembershipItem", back_populates="sale", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Sale {self.sale_number} - {self.status}>"
@@ -87,63 +87,7 @@ class Sale(Base):
         time_diff = datetime.utcnow() - self.created_at.replace(tzinfo=None)
         return time_diff.days == 0  # Solo el mismo día
 
-class SaleItem(Base):
-    """Modelo para items de venta (productos)"""
-    __tablename__ = "sale_items"
 
-    id = Column(Integer, primary_key=True, index=True)
-    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    
-    # Información del producto al momento de la venta
-    product_name = Column(String(255), nullable=False)  # Nombre al momento de venta
-    product_sku = Column(String(50), nullable=True)
-    
-    # Cantidades y precios
-    quantity = Column(Integer, nullable=False)
-    unit_price = Column(Float, nullable=False)  # Precio unitario al momento de venta
-    unit_cost = Column(Float, nullable=True)  # Costo unitario (para cálculo de ganancia)
-    discount_percentage = Column(Float, default=0.0)  # Descuento aplicado
-    line_total = Column(Float, nullable=False)  # Total de la línea
-    
-    # Metadatos
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
-    # Relaciones
-    sale = relationship("Sale", back_populates="items")
-    product = relationship("Product", back_populates="sales")
-
-    def __repr__(self):
-        return f"<SaleItem {self.product_name} x{self.quantity}>"
-
-class MembershipSale(Base):
-    """Modelo para ventas de membresías"""
-    __tablename__ = "membership_sales"
-
-    id = Column(Integer, primary_key=True, index=True)
-    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
-    membership_plan_id = Column(Integer, ForeignKey("membership_plans.id"), nullable=False)
-    membership_id = Column(Integer, ForeignKey("memberships.id"), nullable=True)  # Se crea después
-    
-    # Información del plan al momento de la venta
-    plan_name = Column(String(100), nullable=False)
-    plan_duration_days = Column(Integer, nullable=False)
-    plan_price = Column(Float, nullable=False)
-    
-    # Fechas de la membresía
-    membership_start_date = Column(DateTime(timezone=True), nullable=False)
-    membership_end_date = Column(DateTime(timezone=True), nullable=False)
-    
-    # Metadatos
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
-    # Relaciones
-    sale = relationship("Sale", back_populates="membership_sales")
-    # membership_plan = relationship("MembershipPlan")
-    membership = relationship("Membership")
-
-    def __repr__(self):
-        return f"<MembershipSale {self.plan_name}>"
 
 class SaleReversalLog(Base):
     """Modelo para log de reversiones de ventas"""
@@ -170,3 +114,85 @@ class SaleReversalLog(Base):
 
     def __repr__(self):
         return f"<SaleReversalLog Sale:{self.original_sale_id}>"
+
+# Modelos adicionales para funcionalidad completa
+class SaleDailyAccessItem(Base):
+    """Modelo para ventas de acceso diario"""
+    __tablename__ = "sale_daily_access_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Información del acceso
+    access_date = Column(DateTime(timezone=True), nullable=False)
+    access_type = Column(String(50), default="daily", nullable=False)  # daily, hourly, etc.
+    price = Column(Float, nullable=False)
+    
+    # Metadatos
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Relaciones
+    sale = relationship("Sale")
+    user = relationship("User")
+
+    def __repr__(self):
+        return f"<SaleDailyAccessItem User:{self.user_id}>"
+
+class SaleMembershipItem(Base):
+    """Modelo para items de membresía en ventas"""
+    __tablename__ = "sale_membership_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    membership_plan_id = Column(Integer, nullable=False)  # Sin FK por ahora
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Información del plan
+    plan_name = Column(String(100), nullable=False)
+    plan_duration_days = Column(Integer, nullable=False)
+    plan_price = Column(Float, nullable=False)
+    
+    # Fechas de la membresía
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    end_date = Column(DateTime(timezone=True), nullable=False)
+    
+    # Metadatos
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Relaciones
+    sale = relationship("Sale")
+    user = relationship("User")
+    # membership_plan = relationship("MembershipPlan", back_populates="sale_items")
+
+    def __repr__(self):
+        return f"<SaleMembershipItem {self.plan_name}>"
+
+class SaleProductItem(Base):
+    """Modelo para items de productos en ventas"""
+    __tablename__ = "sale_product_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    
+    # Información del producto al momento de la venta
+    product_name = Column(String(255), nullable=False)
+    product_sku = Column(String(50), nullable=True)
+    
+    # Cantidades y precios
+    quantity = Column(Integer, nullable=False)
+    unit_price = Column(Float, nullable=False)
+    unit_cost = Column(Float, nullable=True)
+    discount_percentage = Column(Float, default=0.0)
+    line_total = Column(Float, nullable=False)
+    
+    # Metadatos
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Relaciones
+    sale = relationship("Sale")
+    product = relationship("Product")
+
+    def __repr__(self):
+        return f"<SaleProductItem {self.product_name} x{self.quantity}>"
