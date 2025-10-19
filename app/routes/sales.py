@@ -213,6 +213,7 @@ async def get_sale_details(
     
     try:
         sale_details = sales_service.get_sale_details(sale_id)
+        print(f"Sale Details: {sale_details}")
         return sale_details
         
     except Exception as e:

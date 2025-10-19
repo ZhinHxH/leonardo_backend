@@ -83,9 +83,24 @@ class Sale(Base):
         if self.is_reversed or self.status in ["cancelled", "refunded"]:
             return False
         
+        # Si created_at es None, no se puede reversar
+        if not self.created_at:
+            return False
+        
         # Solo se pueden reversar ventas del mismo día o hasta 24 horas después
-        time_diff = datetime.utcnow() - self.created_at.replace(tzinfo=None)
-        return time_diff.days == 0  # Solo el mismo día
+        try:
+            # Asegurarse de que created_at sea un datetime sin timezone para la comparación
+            if hasattr(self.created_at, 'replace'):
+                created_at_naive = self.created_at.replace(tzinfo=None)
+            else:
+                # Si no es un datetime, intentar convertirlo
+                created_at_naive = self.created_at
+                
+            time_diff = datetime.utcnow() - created_at_naive
+            return time_diff.days == 0  # Solo el mismo día
+        except (AttributeError, TypeError):
+            # En caso de cualquier error con el datetime, no permitir reversión
+            return False
 
 
 

@@ -491,6 +491,17 @@ class SalesService:
             )
         
         # Obtener items de productos
+        print(f"Sale: {sale.id}")
+        print(f"Sale: {sale.sale_number}")
+        print(f"Sale: {sale.customer_id}")
+        print(f"Sale: {sale.seller_id}")
+        print(f"Sale: {sale.sale_type}")
+        print(f"Sale: {sale.status}")
+        print(f"Sale: {sale.subtotal}")
+        print(f"Sale: {sale.tax_amount}")
+        print(f"Sale: {sale.discount_amount}")
+        print(f"Sale: {sale.total_amount}")
+        print(f"Sale: {sale.payment_method}")
         product_items = []
         for item in sale.items:
             product_items.append({
@@ -503,6 +514,8 @@ class SalesService:
                 "line_total": item.line_total
             })
         
+        print(f"Product Items: {product_items}")
+
         # Obtener membresías vendidas
         membership_items = []
         for membership_sale in sale.membership_sales:
