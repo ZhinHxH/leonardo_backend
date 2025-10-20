@@ -15,11 +15,11 @@ from reportlab.lib.units import inch
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, Gender
 from app.models.sales import Sale, SaleProductItem, SaleMembershipItem
 from app.models.inventory import Product, Category
 from app.models.clinical_history import MembershipPlan
-from app.models.membership import Membership
+from app.models.membership import Membership, MembershipType, MembershipStatus
 from app.core.logging_config import main_logger
 
 logger = main_logger
@@ -60,6 +60,49 @@ class RevenueReport(BaseModel):
     daily_trend: List[DailyRevenueTrend]
     top_products: List[Dict[str, Any]]
     membership_analytics: List[Dict[str, Any]]
+
+# Schemas para reporte de usuarios
+class UserStats(BaseModel):
+    total_users: int
+    new_users: int
+    active_users: int
+    inactive_users: int
+
+class AgeDistribution(BaseModel):
+    age_range: str
+    count: int
+
+class GenderDistribution(BaseModel):
+    gender: str
+    count: int
+
+class MembershipDistribution(BaseModel):
+    membership_type: str
+    count: int
+
+class DailyRegistration(BaseModel):
+    date: str
+    count: int
+
+class UserDetail(BaseModel):
+    id: int
+    name: str
+    email: str
+    dni: str
+    phone: str
+    role: str
+    is_active: bool
+    created_at: str
+    membership_type: Optional[str] = None
+    membership_status: Optional[str] = None
+
+class UsersReport(BaseModel):
+    user_stats: UserStats
+    age_distribution: List[AgeDistribution]
+    gender_distribution: List[GenderDistribution]
+    membership_distribution: List[MembershipDistribution]
+    daily_registrations: List[DailyRegistration]
+    users_list: List[UserDetail]
 
 @router.get("/revenue", response_model=RevenueReport)
 async def get_revenue_report(
@@ -191,6 +234,112 @@ async def get_revenue_report(
         
     except Exception as e:
         logger.error(f"❌ Error obteniendo reporte de ingresos: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.get("/users", response_model=UsersReport)
+async def get_users_report(
+    start_date: Optional[str] = Query(None, description="Fecha inicio (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Fecha fin (YYYY-MM-DD)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtiene reporte completo de usuarios con análisis demográfico y estadísticas
+    """
+    
+    # Verificar permisos
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sin permisos para ver reportes de usuarios"
+        )
+    
+    try:
+        # Convertir fechas
+        start_date_dt = None
+        end_date_dt = None
+        
+        if start_date:
+            try:
+                start_date_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Formato de fecha inválido para start_date"
+                )
+        
+        if end_date:
+            try:
+                end_date_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Formato de fecha inválido para end_date"
+                )
+        
+        # Obtener estadísticas básicas (TODOS los usuarios, sin filtros)
+        total_users = db.query(User).count()
+        active_users = db.query(User).filter(User.is_active == True).count()
+        inactive_users = db.query(User).filter(User.is_active == False).count()
+        
+        # Calcular usuarios nuevos en el período (solo si hay filtros de fecha)
+        if start_date_dt and end_date_dt:
+            new_users = db.query(User).filter(
+                User.created_at >= start_date_dt,
+                User.created_at < end_date_dt
+            ).count()
+        else:
+            # Si no hay filtro de fecha, usar todos los usuarios
+            new_users = total_users
+        
+        # Query para análisis demográfico (todos los usuarios)
+        users_query = db.query(User)
+        
+        logger.info(f"📊 Estadísticas de usuarios - Total: {total_users}, Activos: {active_users}, Inactivos: {inactive_users}, Nuevos: {new_users}")
+        
+        # Verificar que los números concuerden
+        if active_users + inactive_users != total_users:
+            logger.warning(f"⚠️ Inconsistencia en conteo: Activos({active_users}) + Inactivos({inactive_users}) != Total({total_users})")
+        
+        logger.info(f"📅 Filtros aplicados - Desde: {start_date_dt}, Hasta: {end_date_dt}")
+        
+        # Análisis demográfico por edad
+        age_distribution = _get_age_distribution(db, users_query)
+        
+        # Análisis demográfico por género
+        gender_distribution = _get_gender_distribution(db, users_query)
+        
+        # Análisis de membresías
+        membership_distribution = _get_membership_distribution(db, users_query)
+        
+        # Registros diarios
+        daily_registrations = _get_daily_registrations(db, start_date_dt, end_date_dt)
+        
+        # Lista de usuarios relacionados al período (con filtro de fecha)
+        users_list = _get_users_list(db, start_date_dt, end_date_dt)
+        
+        # Construir respuesta
+        user_stats = UserStats(
+            total_users=total_users,
+            new_users=new_users,
+            active_users=active_users,
+            inactive_users=inactive_users
+        )
+        
+        return UsersReport(
+            user_stats=user_stats,
+            age_distribution=age_distribution,
+            gender_distribution=gender_distribution,
+            membership_distribution=membership_distribution,
+            daily_registrations=daily_registrations,
+            users_list=users_list
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo reporte de usuarios: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
@@ -572,6 +721,200 @@ async def get_sold_items(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+# Funciones auxiliares para reporte de usuarios
+def _get_age_distribution(db: Session, users_query) -> List[AgeDistribution]:
+    """Obtiene distribución de usuarios por rango de edad"""
+    try:
+        # Obtener todos los usuarios con fecha de nacimiento
+        users_with_birth_date = db.query(User).filter(User.birth_date.isnot(None)).all()
+        
+        # Calcular edades y agrupar por rangos
+        age_ranges = {
+            '18-25': 0,
+            '26-35': 0,
+            '36-45': 0,
+            '46-55': 0,
+            '55+': 0
+        }
+        
+        current_date = datetime.now().date()
+        
+        for user in users_with_birth_date:
+            if user.birth_date:
+                age = current_date.year - user.birth_date.year
+                if 18 <= age <= 25:
+                    age_ranges['18-25'] += 1
+                elif 26 <= age <= 35:
+                    age_ranges['26-35'] += 1
+                elif 36 <= age <= 45:
+                    age_ranges['36-45'] += 1
+                elif 46 <= age <= 55:
+                    age_ranges['46-55'] += 1
+                elif age > 55:
+                    age_ranges['55+'] += 1
+        
+        return [AgeDistribution(age_range=range_name, count=count) 
+                for range_name, count in age_ranges.items()]
+        
+    except Exception as e:
+        logger.error(f"❌ Error en _get_age_distribution: {e}")
+        return []
+
+def _get_gender_distribution(db: Session, users_query) -> List[GenderDistribution]:
+    """Obtiene distribución de usuarios por género"""
+    try:
+        # Agrupar por género de todos los usuarios
+        gender_stats = db.query(User).with_entities(
+            User.gender,
+            func.count(User.id).label('count')
+        ).group_by(User.gender).all()
+        
+        result = []
+        for stat in gender_stats:
+            gender_name = "Masculino" if stat.gender == Gender.MALE else "Femenino" if stat.gender == Gender.FEMALE else "Otro"
+            result.append(GenderDistribution(
+                gender=gender_name,
+                count=stat.count
+            ))
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error en _get_gender_distribution: {e}")
+        return []
+
+def _get_membership_distribution(db: Session, users_query) -> List[MembershipDistribution]:
+    """Obtiene distribución de usuarios por tipo de membresía"""
+    try:
+        # Obtener todos los usuarios (no solo los del query filtrado)
+        all_users = db.query(User).all()
+        all_user_ids = [user.id for user in all_users]
+        
+        if not all_user_ids:
+            return []
+        
+        # Obtener membresías activas de todos los usuarios
+        membership_stats = db.query(Membership).filter(
+            Membership.user_id.in_(all_user_ids),
+            Membership.is_active == True
+        ).with_entities(
+            Membership.type,
+            func.count(Membership.id).label('count')
+        ).group_by(Membership.type).all()
+        
+        result = []
+        for stat in membership_stats:
+            type_name = "Diaria" if stat.type == MembershipType.DAILY else "Mensual" if stat.type == MembershipType.MONTHLY else "Trimestral"
+            result.append(MembershipDistribution(
+                membership_type=type_name,
+                count=stat.count
+            ))
+        
+        # Calcular usuarios sin membresía activa
+        users_with_active_membership = db.query(Membership.user_id).filter(
+            Membership.user_id.in_(all_user_ids),
+            Membership.is_active == True
+        ).distinct().count()
+        
+        users_without_membership = len(all_user_ids) - users_with_active_membership
+        if users_without_membership > 0:
+            result.append(MembershipDistribution(
+                membership_type="Sin membresía",
+                count=users_without_membership
+            ))
+        
+        # Log para verificar consistencia
+        total_membership_count = sum(item.count for item in result)
+        logger.info(f"📊 Distribución de membresías - Total usuarios: {len(all_user_ids)}, Con membresía: {users_with_active_membership}, Sin membresía: {users_without_membership}, Total en distribución: {total_membership_count}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error en _get_membership_distribution: {e}")
+        return []
+
+def _get_daily_registrations(db: Session, start_date_dt, end_date_dt) -> List[DailyRegistration]:
+    """Obtiene registros diarios de usuarios"""
+    try:
+        # Si no hay fechas, usar los últimos 7 días
+        if not start_date_dt or not end_date_dt:
+            end_date_dt = datetime.now()
+            start_date_dt = end_date_dt - timedelta(days=7)
+        
+        # Agrupar por día
+        daily_stats = db.query(User).filter(
+            User.created_at >= start_date_dt,
+            User.created_at < end_date_dt
+        ).with_entities(
+            func.date(User.created_at).label('date'),
+            func.count(User.id).label('count')
+        ).group_by(func.date(User.created_at)).order_by('date').all()
+        
+        result = []
+        for stat in daily_stats:
+            result.append(DailyRegistration(
+                date=stat.date.strftime('%Y-%m-%d'),
+                count=stat.count
+            ))
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error en _get_daily_registrations: {e}")
+        return []
+
+def _get_users_list(db: Session, start_date_dt, end_date_dt) -> List[UserDetail]:
+    """Obtiene lista detallada de usuarios relacionados al período"""
+    try:
+        # Query base para usuarios
+        users_query = db.query(User)
+        
+        # Aplicar filtros de fecha si se proporcionan
+        if start_date_dt:
+            users_query = users_query.filter(User.created_at >= start_date_dt)
+        if end_date_dt:
+            users_query = users_query.filter(User.created_at < end_date_dt)
+        
+        # Obtener usuarios con información básica
+        users = users_query.order_by(User.created_at.desc()).limit(100).all()  # Limitar a 100 usuarios para rendimiento
+        
+        result = []
+        for user in users:
+            # Obtener membresía activa del usuario
+            active_membership = db.query(Membership).filter(
+                Membership.user_id == user.id,
+                Membership.is_active == True
+            ).first()
+            
+            membership_type = None
+            membership_status = None
+            
+            if active_membership:
+                membership_type = "Diaria" if active_membership.type == MembershipType.DAILY else "Mensual" if active_membership.type == MembershipType.MONTHLY else "Trimestral"
+                membership_status = "Activa"
+            else:
+                membership_type = "Sin membresía"
+                membership_status = "Sin membresía"
+            
+            result.append(UserDetail(
+                id=user.id,
+                name=user.name,
+                email=user.email,
+                dni=user.dni or "",
+                phone=user.phone or "",
+                role=user.role.value.lower() if user.role else "member",
+                is_active=user.is_active,
+                created_at=user.created_at.isoformat() if user.created_at else "",
+                membership_type=membership_type,
+                membership_status=membership_status
+            ))
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error en _get_users_list: {e}")
+        return []
 
 # Funciones auxiliares
 def _get_revenue_by_plan(db: Session, query, membership_plan: Optional[str] = None) -> List[RevenueByPlan]:
