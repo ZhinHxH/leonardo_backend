@@ -75,7 +75,7 @@ class User(Base):
     access_events = relationship("AccessEvent", back_populates="user", cascade="all, delete-orphan")
     clinical_records = relationship("ClinicalHistory", foreign_keys="ClinicalHistory.user_id", back_populates="user", cascade="all, delete-orphan")
     goals = relationship("UserGoal", foreign_keys="UserGoal.user_id", back_populates="user", cascade="all, delete-orphan")
-    
+
     cash_closures = relationship("CashClosure", foreign_keys="CashClosure.user_id", back_populates="user", cascade="all, delete-orphan")
     vehicles = relationship("Vehicle", back_populates="user", cascade="all, delete-orphan")
 
@@ -98,3 +98,5 @@ class User(Base):
 
 # Importación eliminada para evitar dependencia circular
 # La relación se define usando string en vehicles.py
+# from app.models.vehicles import Vehicle
+# from app.models.cash_closure import CashClosure
