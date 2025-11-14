@@ -23,25 +23,50 @@ class CashClosureService:
                           notes: Optional[str] = None) -> CashClosure:
         """Crea un nuevo cierre de caja o actualiza uno existente para el mismo día"""
         
-        # Validar que el cierre sea solo para la fecha actual
+        # Validar que el cierre sea para una fecha reciente (no más de 1 día en el futuro)
         today = datetime.utcnow().date()
         shift_date = shift_start.date()
         
-        if shift_date != today:
+        # Permitir cierres para hoy o hasta 1 día en el futuro
+        if shift_date > today + timedelta(days=1):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Los cierres de caja solo pueden realizarse para la fecha actual ({today}). Fecha solicitada: {shift_date}"
+                detail=f"Los cierres de caja no pueden realizarse para fechas futuras. Fecha solicitada: {shift_date}, Fecha máxima permitida: {today + timedelta(days=1)}"
             )
         
-        # Verificar si ya existe un cierre para este usuario en la fecha actual
+        # Permitir cierres para fechas pasadas recientes (hasta 7 días atrás)
+        if shift_date < today - timedelta(days=7):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Los cierres de caja no pueden realizarse para fechas muy antiguas. Fecha solicitada: {shift_date}, Fecha mínima permitida: {today - timedelta(days=7)}"
+            )
+        
+        # Verificar si ya existe un cierre para este usuario en la fecha del turno
+        logger.info(f"Buscando cierres existentes para usuario {user_id} en fecha {shift_date}")
+        
+        # Buscar cierres existentes para el usuario en la fecha del turno
         existing_closure = self.db.query(CashClosure)\
                                  .filter(CashClosure.user_id == user_id)\
-                                 .filter(CashClosure.shift_date == today)\
+                                 .filter(CashClosure.shift_date == shift_date)\
                                  .first()
         
+        # Si no se encuentra, buscar en un rango de fechas cercanas (por si hay problemas de timezone)
+        if not existing_closure:
+            logger.info(f"No se encontró cierre exacto, buscando en rango de fechas cercanas")
+            start_date = shift_date - timedelta(days=1)
+            end_date = shift_date + timedelta(days=1)
+            
+            existing_closure = self.db.query(CashClosure)\
+                                     .filter(CashClosure.user_id == user_id)\
+                                     .filter(CashClosure.shift_date >= start_date)\
+                                     .filter(CashClosure.shift_date <= end_date)\
+                                     .first()
+        
         if existing_closure:
-            logger.info(f"Actualizando cierre existente {existing_closure.id} para usuario {user_id} en fecha {today}")
+            logger.info(f"Encontrado cierre existente {existing_closure.id} para usuario {user_id} en fecha {existing_closure.shift_date}")
             return self._update_existing_closure(existing_closure, shift_start, sales_data, counted_data, notes)
+        else:
+            logger.info(f"No se encontró cierre existente para usuario {user_id} en fecha {shift_date}, creando nuevo cierre")
         
         # Calcular diferencias
         differences = self._calculate_differences(sales_data, counted_data)
@@ -49,7 +74,7 @@ class CashClosureService:
         # Crear el cierre de caja
         cash_closure = CashClosure(
             user_id=user_id,
-            shift_date=datetime.utcnow().date(),
+            shift_date=shift_date,
             shift_start=shift_start,
             shift_end=datetime.utcnow(),
             total_sales=sales_data.get('total_sales', 0.0),
